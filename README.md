@@ -4,6 +4,8 @@ These scripts compute the viscosity of graphene nanoparticle suspensions in wate
 
 Slip at the graphene surface is set by the LJ energy between carbon and the water oxygen, `eps_CO`: the default 0 keeps the mixing rule (pristine graphene, large slip), and 1.4 kcal/mol gives no slip.
 
+Archived on Zenodo: https://doi.org/10.5281/zenodo.23161753
+
 ## Layout
 
 ```
