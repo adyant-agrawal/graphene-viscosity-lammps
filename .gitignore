@@ -1,0 +1,8 @@
+make.ipynb
+__pycache__/
+*/data.*
+*/system.json
+*/*.dat
+*/*.xtc
+*/log.*
+log.lammps

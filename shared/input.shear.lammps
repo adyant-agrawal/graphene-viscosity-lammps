@@ -1,0 +1,120 @@
+# Shear graphene particles in water between two FeO walls moving at opposite velocities
+# Run after input.equilibration.lammps, for example:
+#   lmp -in ../shared/input.shear.lammps -var gamma 5e10 -var eps_CO 1.4
+
+variable	gamma index 5e10 # shear rate - 1/s
+variable	eps_CO index 0 # C-O(water) LJ energy - kcal/mol; 0 keeps the mixing rule (slip), 1.4 gives no slip
+variable	nsteps index 1000000 # production steps
+
+variable	P equal 1e5 # desired pressure - Pa
+
+variable	JtoKcal equal 0.000239006
+variable	mtoA equal 1e10
+variable	Na equal 6.022e23
+
+variable	convert equal ${JtoKcal}/${mtoA}*${Na}
+variable	dt equal 1 # fs
+variable	T equal 300.0 # K
+
+boundary	p p p
+units		real
+
+atom_style	full
+bond_style	harmonic
+angle_style	harmonic
+dihedral_style	opls
+improper_style	harmonic
+
+pair_style	lj/cut/tip4p/long 1 2 1 1 0.1546 12.0
+kspace_style	pppm/tip4p 1.0e-4
+pair_modify	shift yes mix arithmetic
+special_bonds	lj/coul 0.0 0.0 0.5 angle yes dihedral yes
+
+read_data	data.equilibrium
+
+include		../shared/PARM.lammps
+if "${eps_CO} > 0" then "pair_coeff 1 5 ${eps_CO} 3.35445"
+
+group		H2O type 1 2
+group		FeO type 3 4
+group		Car type 5 6
+group		move subtract all Car
+
+variable	box_z_center equal 0.5*(zlo+zhi)
+
+region		top block INF INF INF INF ${box_z_center} INF units box
+region		bot block INF INF INF INF INF ${box_z_center} units box
+
+group		top region top
+group		bot region bot
+group		topFeO intersect FeO top
+group		botFeO intersect FeO bot
+
+variable	pist equal xcm(topFeO,z)
+variable	pisb equal xcm(botFeO,z)
+variable	ThickL equal bound(botFeO,zmax)-bound(botFeO,zmin)
+variable	ThickU equal bound(topFeO,zmax)-bound(topFeO,zmin)
+variable	intto equal v_pist-${ThickU}/2
+variable	intbo equal v_pisb+${ThickL}/2
+variable	pU equal ${gamma}/1e15*(v_intto-v_intbo)/2
+variable	mU equal -${gamma}/1e15*(v_intto-v_intbo)/2
+variable	lx equal lx
+variable	ly equal ly
+
+variable	Nwall equal count(topFeO)
+variable	Surface equal lx*ly*1e-20
+variable	FzL equal v_P*v_Surface*${convert}/${Nwall}
+variable	FzU equal -v_P*v_Surface*${convert}/${Nwall}
+
+fix		s1 H2O shake 1.0e-4 200 0 b 1 a 1
+
+thermo		10000
+timestep	${dt}
+
+velocity	H2O ramp vx ${mU} ${pU} z ${intbo} ${intto} sum yes units box
+
+# thermostat the water along y and z, and the walls along z, never along the flow
+compute		tFeOt topFeO temp/partial 0 0 1
+compute		tFeOb botFeO temp/partial 0 0 1
+compute		tH2O H2O temp/partial 0 1 1
+
+fix		myber3 H2O temp/berendsen ${T} ${T} 100
+fix_modify	myber3 temp tH2O
+
+fix		myber1 topFeO temp/berendsen ${T} ${T} 100
+fix_modify	myber1 temp tFeOt
+
+fix		myber2 botFeO temp/berendsen ${T} ${T} 100
+fix_modify	myber2 temp tFeOb
+
+fix		afu topFeO addforce 0 0 ${FzU}
+fix		afl botFeO addforce 0 0 ${FzL}
+fix		msf1 topFeO setforce 0 0 NULL
+fix		msf2 botFeO setforce 0 0 NULL
+
+velocity	botFeO set v_mU 0 0
+velocity	topFeO set v_pU 0 0
+
+# let the flow develop with the particles held in place (20 ps)
+fix		mymom move momentum 100 linear 0 1 1
+fix		mynve move nve
+
+run		20000
+
+unfix		mymom
+unfix		mynve
+reset_timestep	0
+
+# production: particles free, no thermostat on graphene
+fix		mymom all momentum 100 linear 0 1 1
+fix		mynve all nve
+
+fix		myat1 all ave/time 1 1000 1000 c_tH2O c_tFeOb c_tFeOt file temperature.dat
+fix		myat2 all ave/time 1 1000 1000 f_msf1[1] f_msf2[1] file force.dat
+fix		myat3 all ave/time 1 1000 1000 v_intto v_intbo v_lx v_ly file box.dat
+print		"${gamma}" file gamma.dat screen no
+
+dump		dp1 all xtc 5000 dump.shear.xtc
+
+run		${nsteps}
+write_data	data.shear

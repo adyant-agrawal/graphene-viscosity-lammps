@@ -1,0 +1,128 @@
+# Equilibrate graphene particles in water between two FeO walls (no shear)
+# Run after build.py, in 3D-discs/ or 2D-plates/: lmp -in ../shared/input.equilibration.lammps   (writes data.equilibrium)
+
+variable	Pi equal 1e8 # pressure during the initial compression - Pa
+variable	Pf equal 1e5 # desired pressure - Pa
+
+variable	JtoKcal equal 0.000239006
+variable	mtoA equal 1e10
+variable	Na equal 6.022e23
+
+variable	convert equal ${JtoKcal}/${mtoA}*${Na}
+variable	dt equal 1.0 # fs
+variable	T equal 300.0 # K
+
+boundary	p p p
+units		real
+
+atom_style	full
+bond_style	harmonic
+angle_style	harmonic
+dihedral_style	opls
+improper_style	harmonic
+
+pair_style	lj/cut/tip4p/long 1 2 1 1 0.1546 12.0
+kspace_style	pppm/tip4p 1.0e-4
+pair_modify	shift yes mix arithmetic
+special_bonds	lj/coul 0.0 0.0 0.5 angle yes dihedral yes
+
+neigh_modify	one 10000 page 200000
+
+read_data	data.lammps
+
+include		../shared/PARM.lammps
+
+group		H2O type 1 2
+group		FeO type 3 4
+group		Car type 5 6
+
+variable	box_z_center equal 0.5*(zlo+zhi)
+
+region		top block INF INF INF INF ${box_z_center} INF units box
+region		bot block INF INF INF INF INF ${box_z_center} units box
+
+group		top region top
+group		bot region bot
+group		topFeO intersect FeO top
+group		botFeO intersect FeO bot
+
+# remove overlaps, SHAKE keeps the water molecules rigid
+fix		s1 H2O shake 1.0e-4 200 0 b 1 a 1
+
+thermo		10
+minimize	1e-3 1e-3 1000 1000
+reset_timestep	0
+
+variable	pist equal xcm(topFeO,z)
+variable	pisb equal xcm(botFeO,z)
+variable	ThickL equal bound(botFeO,zmax)-bound(botFeO,zmin)
+variable	ThickU equal bound(topFeO,zmax)-bound(topFeO,zmin)
+variable	intto equal v_pist-${ThickU}/2
+variable	intbo equal v_pisb+${ThickL}/2
+variable	lx equal lx
+variable	ly equal ly
+
+variable	Nwall equal count(topFeO)
+variable	Surface equal lx*ly*1e-20
+variable	FzL equal v_Pi*v_Surface*${convert}/${Nwall}
+variable	FzU equal -v_Pi*v_Surface*${convert}/${Nwall}
+
+velocity	all set 0 0 0
+
+fix		sfu topFeO setforce 0 NULL NULL
+fix		sfl botFeO setforce 0 NULL NULL
+fix		afu topFeO addforce 0 0 ${FzU}
+fix		afl botFeO addforce 0 0 ${FzL}
+
+fix		mynve all nve/limit 0.1
+
+fix		mymom H2O momentum 100 linear 1 1 1 angular
+fix		mymom2 topFeO momentum 100 linear 0 1 0
+fix		mymom3 botFeO momentum 100 linear 0 1 0
+
+compute		tFeOt topFeO temp/partial 0 1 1
+compute		tFeOb botFeO temp/partial 0 1 1
+compute		tH2O H2O temp
+compute		tCar Car temp
+
+fix		myber1 topFeO temp/berendsen ${T} ${T} 100
+fix_modify	myber1 temp tFeOt
+
+fix		myber2 botFeO temp/berendsen ${T} ${T} 100
+fix_modify	myber2 temp tFeOb
+
+fix		myber3 H2O temp/berendsen ${T} ${T} 100
+fix_modify	myber3 temp tH2O
+
+fix		myber4 Car temp/berendsen ${T} ${T} 100
+fix_modify	myber4 temp tCar
+
+fix		myrec all recenter NULL NULL INIT
+thermo		5000
+timestep	${dt}
+
+# compression at Pi (15 ps)
+run		15000
+
+unfix		mynve
+unfix		myrec
+unfix		afu
+unfix		afl
+
+# relaxation at Pf (200 ps)
+variable	FzL equal v_Pf*v_Surface*${convert}/${Nwall}
+variable	FzU equal -v_Pf*v_Surface*${convert}/${Nwall}
+
+fix		afu topFeO addforce 0 0 v_FzU
+fix		afl botFeO addforce 0 0 v_FzL
+
+fix		myat1 all ave/time 10 1000 10000 c_tH2O c_tCar c_tFeOb c_tFeOt file temperature.equilibration.dat
+fix		myat3 all ave/time 5 1000 5000 v_intto v_intbo v_lx v_ly file box.equilibration.dat
+
+fix		mynve all nve
+fix		myrec all recenter NULL NULL INIT
+
+dump		dp1 all xtc 5000 dump.equilibration.xtc
+
+run		200000
+write_data	data.equilibrium
